@@ -1,21 +1,16 @@
-# Copyright (c) 2016 Ultimaker B.V.
-# Cura is released under the terms of the AGPLv3 or higher.
-from . import ConnectUSBMockupAction
-from UM.i18n import i18nCatalog
-catalog = i18nCatalog("cura")
+# Copyright (c) 2019 Aldo Hoeben / fieldOfView
+# SerialConnection is released under the terms of the GPLv3 or higher.
+
+import os, json
+
+from . import SerialOutputDevicePlugin
+from . import ConnectSerialAction
 
 def getMetaData():
-    return {
-        "type": "extension",
-        "plugin": {
-            "name": "USB connection",
-            "author": "Ultimaker",
-            "description": catalog.i18nc("@info:what's this", "Mockup of next gen USB connection management"),
-            "api": 3
-        }
-    }
+    return {}
 
 def register(app):
     return {
-        "machine_action": ConnectUSBMockupAction.ConnectUSBMockupAction()
+        "output_device": SerialOutputDevicePlugin.SerialOutputDevicePlugin(),
+        "machine_action": ConnectSerialAction.ConnectSerialAction()
     }

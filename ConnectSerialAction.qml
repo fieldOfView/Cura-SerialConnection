@@ -1,3 +1,6 @@
+// Copyright (c) 2019 Aldo Hoeben / fieldOfView
+// SerialConnection is released under the terms of the GPLv3 or higher.
+
 import UM 1.2 as UM
 import Cura 1.0 as Cura
 

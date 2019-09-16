@@ -1,3 +1,6 @@
+# Copyright (c) 2019 Aldo Hoeben / fieldOfView
+# SerialConnection is released under the terms of the GPLv3 or higher.
+
 from UM.i18n import i18nCatalog
 from UM.Settings.DefinitionContainer import DefinitionContainer
 from UM.Application import Application
@@ -5,23 +8,19 @@ from UM.Application import Application
 import cura.Settings.CuraContainerRegistry
 from cura.MachineAction import MachineAction
 
-from PyQt5.QtCore import pyqtSignal
-
 import os.path
 
 catalog = i18nCatalog("cura")
 
-class ConnectUSBMockupAction(MachineAction):
+class ConnectSerialAction(MachineAction):
     def __init__(self, parent = None):
-        super().__init__("ConnectUSBMockupAction", catalog.i18nc("@action", "Connect via USB"))
+        super().__init__("ConnectSerialAction", catalog.i18nc("@action", "Connect to serial port"))
 
-        self._qml_url = "ConnectUSBMockupAction.qml"
+        self._qml_url = "ConnectSerialAction.qml"
         self._window = None
         self._context = None
 
         cura.Settings.CuraContainerRegistry.getInstance().containerAdded.connect(self._onContainerAdded)
-
-    instancesChanged = pyqtSignal()
 
     def _onContainerAdded(self, container):
         # Add this action as a supported action to all machine definitions
