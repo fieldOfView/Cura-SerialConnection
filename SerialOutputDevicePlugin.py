@@ -2,10 +2,8 @@
 # SerialConnection is released under the terms of the GPLv3 or higher.
 
 from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin
-from UM.OutputDevice.OutputDeviceManager import ManualDeviceAdditionAttempt
 
 from UM.Signal import Signal, signalemitter
-from UM.Logger import Logger
 
 import time
 import threading
