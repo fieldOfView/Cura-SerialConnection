@@ -40,51 +40,135 @@ Cura.MachineAction
             text: catalog.i18nc("@label", "Select the port and communication speed to use to connect with this printer.")
         }
 
-        Row
+        GridLayout
         {
-            spacing: UM.Theme.getSize("default_margin").width
+            width: parent.width
+            columns: 2
+            columnSpacing: UM.Theme.getSize("default_margin").width
+            rowSpacing: UM.Theme.getSize("default_lining").height
+
             Label
             {
-                text: catalog.i18nc("@label", "Port:")
-                anchors.verticalCenter: parent.verticalCenter
+                text: catalog.i18nc("@label", "Serial Port:")
             }
             ComboBox
             {
-                model: ["COM3", "COM4", "COM5"]
-                anchors.verticalCenter: parent.verticalCenter
+                id: connectionPort
+
+                property bool populatingModel: false
+                model: ListModel
+                {
+                    id: connectionPortModel
+
+                    Component.onCompleted: populateModel()
+
+                    function populateModel()
+                    {
+                        connectionPort.populatingModel = true;
+                        clear();
+
+                        append({key: "NONE", text: catalog.i18nc("@label", "Don't connect")});
+                        var current_index = 0;
+
+                        var port_list = manager.portList;
+                        for(var index in port_list)
+                        {
+                            append({key: port_list[index], text: port_list[index]});
+                            if(port_list[index] == manager.serialPort)
+                            {
+                                current_index = parseInt(index) + 2;
+                            }
+                        }
+
+                        if(current_index == 0 && manager.serialPort != "NONE")
+                        {
+                            append({key: manager.serialPort, text: catalog.i18nc("@label", "%1 (not available)").arg(manager.serialPort)});
+                            current_index = count - 1;
+                        }
+
+                        connectionPort.currentIndex = current_index;
+                        connectionPort.populatingModel = false;
+                    }
+                }
+
+                onActivated:
+                {
+                    if(!populatingModel && model.get(index))
+                    {
+                        manager.setSerialPort(model.get(index).key);
+                    }
+                }
+
+                Connections
+                {
+                    target: manager
+                    onSerialPortsChanged: connectionPortModel.populateModel()
+                }
+
             }
             Label
             {
-                text: catalog.i18nc("@label", "Communication Speed:")
-                anchors.verticalCenter: parent.verticalCenter
+                text: catalog.i18nc("@label", "Connection Speed:")
             }
             ComboBox
             {
-                model: [250000, 230400, 115200, 57600, 38400, 19200, 9600]
-                anchors.verticalCenter: parent.verticalCenter
+                id: connectionRate
+                model:
+                {
+                    var rates = [];
+                    for(var index in manager.allBaudRates)
+                    {
+                        rates.push({key: manager.allBaudRates[index], text: manager.allBaudRates[index].toString()});
+                    }
+                    return rates;
+                }
+                enabled: connectionPortModel.get(connectionPort.currentIndex).key != "NONE"
+                currentIndex:
+                {
+                    for(var index in model)
+                    {
+                        if(model[index].key == manager.baudRate)
+                        {
+                            return index;
+                        }
+                    }
+                    return 0; // default to first in list
+                }
+                onActivated: manager.setBaudRate(model[index].key)
             }
+
+            Label { text: ""; visible: detectButton.visible }
             Button
             {
+                id: detectButton
                 text: catalog.i18nc("@action:button", "Detect")
+                enabled: connectionPortModel.count > 1
             }
+            Label { text: ""; visible: detectButton.visible }
         }
 
         CheckBox
         {
-            text: catalog.i18nc("@label", "Automatically detect this printer on startup if the connection seems to have changed.")
-            checked: true
+            id: autoConnect
+            text: catalog.i18nc("@label", "Automatically connect this printer on startup.")
+            checked: manager.autoConnect
+            visible: connectionPortModel.get(connectionPort.currentIndex).key != "NONE"
+            onClicked: manager.setAutoConnect(checked)
         }
 
         Label
         {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: catalog.i18nc("@label", "Note: detecting printers may reset devices connected to this computer, and may interrupt an ongoing print on a USB-connected printer.")
+            visible: autoConnect.visible && autoConnect.checked
+            text: catalog.i18nc("@label", "Note: connecting to a printer will interrupt ongoing prints on the printer.")
         }
 
         Button
         {
+            id: testCommunication
             text: catalog.i18nc("@action:button", "Test Communication")
+            visible: connectionPortModel.get(connectionPort.currentIndex).key != "NONE"
             onClicked: testOutput.visible = true
         }
 

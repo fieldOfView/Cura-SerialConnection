@@ -11,6 +11,6 @@ def getMetaData():
 
 def register(app):
     return {
-        "output_device": SerialOutputDevicePlugin.SerialOutputDevicePlugin(),
+        "output_device": SerialOutputDevicePlugin.SerialOutputDevicePlugin(app),
         "machine_action": ConnectSerialAction.ConnectSerialAction()
     }
