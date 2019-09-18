@@ -1,12 +1,12 @@
 # Copyright (c) 2019 Aldo Hoeben / fieldOfView
 # SerialConnection is released under the terms of the GPLv3 or higher.
 
+from cura.MachineAction import MachineAction
+
 from UM.i18n import i18nCatalog
 from UM.Settings.DefinitionContainer import DefinitionContainer
 from UM.Application import Application
 from UM.Settings.ContainerRegistry import ContainerRegistry
-
-from cura.MachineAction import MachineAction
 
 from . import SerialOutputDevicePlugin
 
@@ -28,7 +28,6 @@ class ConnectSerialAction(MachineAction):
 
         self._output_device_plugin = None
         Application.getInstance().engineCreatedSignal.connect(self._onEngineCreated)
-
 
     def _onEngineCreated(self) -> None:
         self._output_device_plugin = SerialOutputDevicePlugin.SerialOutputDevicePlugin.getInstance()

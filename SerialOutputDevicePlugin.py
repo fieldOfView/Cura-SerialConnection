@@ -3,7 +3,10 @@
 
 from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin
 
+from UM.Logger import Logger
 from UM.Signal import Signal, signalemitter
+from UM.PluginRegistry import PluginRegistry
+from UM.PluginError import PluginNotFoundError
 
 import time
 import threading
@@ -33,6 +36,21 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
 
         self._serial_port_list = []
 
+        application.pluginsLoaded.connect(self._onPluginsLoaded)
+
+    def _onPluginsLoaded(self) -> None:
+        # sabotage USB Printing plugin
+        try:
+            usb_printing_plugin = PluginRegistry.getInstance().getPluginObject("USBPrinting")
+        except PluginNotFoundError:
+            return
+
+        Logger.log("d", "Inhibiting serial port detection by the USB Printing plugin")
+        usb_printing_plugin._update_thread = threading.Thread(target = self._nilThread)
+
+    def _nilThread(self) -> None:
+        Logger.log("d", "The USB serial port detection would start now, but has been inhibited by the Serial Connection plugin")
+
     addSerialPort = Signal()
     removeSerialPort = Signal()
 
@@ -47,32 +65,6 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
     def stop(self):
         self._check_updates = False
 
-    ## Used to check if this adress makes sense to this plugin w.r.t. adding(/removing) a manual device.
-    #  /return 'No', 'possible', or 'priority' (in the last case this plugin takes precedence, use with care).
-    def canAddManualDevice(self, address: str = "") -> ManualDeviceAdditionAttempt:
-        return ManualDeviceAdditionAttempt.POSSIBLE
-
-    ## Add a manual device by the specified address (for example, an IP).
-    #  The optional callback is a function with signature func(success: bool, address: str) -> None, where
-    #    - success is a bool that indicates if the manual device's information was successfully retrieved.
-    #    - address is the address of the manual device.
-    def addManualDevice(self, address: str, callback: Optional[Callable[[bool, str], None]] = None) -> None:
-        pass
-
-    ## Remove a manual device by either the name and/or the specified address.
-    #  Since this may be asynchronous, use the 'removeDeviceSignal' when the machine actually has been added.
-    def removeManualDevice(self, key: str, address: Optional[str] = None) -> None:
-        pass
-
-    ## Starts to discovery network devices that can be handled by this plugin.
-    def startDiscovery(self) -> None:
-        pass
-
-    ## Refresh the available/discovered printers for an output device that handles network printers.
-    def refreshConnections(self) -> None:
-        pass
-
-
     ##  Create a list of serial ports on the system.
     def getSerialPortList(self):
         result = []
@@ -83,7 +75,6 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
             result.append(port[0])
 
         return result
-
 
     def _updateThread(self):
         while self._check_updates:
