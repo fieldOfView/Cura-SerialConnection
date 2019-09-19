@@ -43,7 +43,7 @@ Cura.MachineAction
         GridLayout
         {
             width: parent.width
-            columns: 2
+            columns: 3
             columnSpacing: UM.Theme.getSize("default_margin").width
             rowSpacing: UM.Theme.getSize("default_lining").height
 
@@ -67,22 +67,34 @@ Cura.MachineAction
                         connectionPort.populatingModel = true;
                         clear();
 
-                        append({key: "NONE", text: catalog.i18nc("@label", "Don't connect")});
+                        append({
+                            key: "NONE",
+                            text: catalog.i18nc("@label", "Don't connect"),
+                            available: false
+                        });
                         var current_index = 0;
 
                         var port_list = manager.portList;
                         for(var index in port_list)
                         {
-                            append({key: port_list[index], text: port_list[index]});
+                            append({
+                                key: port_list[index],
+                                text: port_list[index],
+                                available: true
+                            });
                             if(port_list[index] == manager.serialPort)
                             {
-                                current_index = parseInt(index) + 2;
+                                current_index = index + 1;
                             }
                         }
 
-                        if(current_index == 0 && manager.serialPort != "NONE")
+                        if(current_index == 0 && manager.serialPort != "NONE" && manager.serialPort != "")
                         {
-                            append({key: manager.serialPort, text: catalog.i18nc("@label", "%1 (not available)").arg(manager.serialPort)});
+                            append({
+                                key: manager.serialPort,
+                                text: catalog.i18nc("@label", "%1 (not available)").arg(manager.serialPort),
+                                available: false
+                            });
                             current_index = count - 1;
                         }
 
@@ -106,6 +118,7 @@ Cura.MachineAction
                 }
 
             }
+            Label { text: "" }
             Label
             {
                 text: catalog.i18nc("@label", "Connection Speed:")
@@ -137,14 +150,12 @@ Cura.MachineAction
                 onActivated: manager.setBaudRate(model[index].key)
             }
 
-            Label { text: ""; visible: detectButton.visible }
             Button
             {
                 id: detectButton
                 text: catalog.i18nc("@action:button", "Detect")
-                enabled: connectionPortModel.count > 1
+                enabled: connectionPortModel.count > 1 && connectionPortModel.get(connectionPort.currentIndex).available
             }
-            Label { text: ""; visible: detectButton.visible }
         }
 
         CheckBox
@@ -169,7 +180,11 @@ Cura.MachineAction
             id: testCommunication
             text: catalog.i18nc("@action:button", "Test Communication")
             visible: connectionPortModel.get(connectionPort.currentIndex).key != "NONE"
-            onClicked: testOutput.visible = true
+            enabled: connectionPortModel.get(connectionPort.currentIndex).available
+            onClicked:
+            {
+                testOutput.visible = true
+            }
         }
 
         TextArea
