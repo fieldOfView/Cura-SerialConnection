@@ -8,6 +8,8 @@ from UM.Signal import Signal, signalemitter
 from UM.PluginRegistry import PluginRegistry
 from UM.PluginError import PluginNotFoundError
 
+from . import SerialOutputDevice
+
 import time
 import threading
 import serial
@@ -20,6 +22,11 @@ if TYPE_CHECKING:
 #       If we see a port that should be connected to the active machine instance a connection is made.
 @signalemitter
 class SerialOutputDevicePlugin(OutputDevicePlugin):
+    addInstanceSignal = Signal()
+    removeInstanceSignal = Signal()
+
+    serialPortsChanged = Signal()
+
     def __init__(self, application) -> None:
         if SerialOutputDevicePlugin.__instance is not None:
             raise RuntimeError("Try to create singleton '%s' more than once" % self.__class__.__name__)
@@ -29,44 +36,31 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
 
         self._application = application
 
-        self._update_thread = threading.Thread(target = self._updateThread)
-        self._update_thread.setDaemon(True)
+        self._instances = {} # type: Dict[str, SerialOutputDevice.SerialOutputDevice]
+        self._serial_port_list = [] # type: List[str]
 
-        self._check_updates = True
+        # Because the model needs to be created in the same thread as the QMLEngine, we use a signal.
+        self.addInstanceSignal.connect(self._onAddInstance)
+        self.removeInstanceSignal.connect(self._onRemoveInstance)
+        self._application.globalContainerStackChanged.connect(self._onGlobalContainerStackChanged)
 
-        self._serial_port_list = []
+        self._discovery_thread = threading.Thread(target = self._discoveryThread)
+        self._discovery_thread.setDaemon(True)
+        self._perform_discovery = True
 
         application.pluginsLoaded.connect(self._onPluginsLoaded)
 
-    def _onPluginsLoaded(self) -> None:
-        # sabotage USB Printing plugin
-        try:
-            usb_printing_plugin = PluginRegistry.getInstance().getPluginObject("USBPrinting")
-        except PluginNotFoundError:
-            return
-
-        Logger.log("d", "Inhibiting serial port detection by the USB Printing plugin")
-        usb_printing_plugin._update_thread = threading.Thread(target = self._nilThread)
-
-    def _nilThread(self) -> None:
-        Logger.log("d", "The USB serial port detection would start now, but has been inhibited by the Serial Connection plugin")
-
-    addSerialPort = Signal()
-    removeSerialPort = Signal()
-
-    serialPortsChanged = Signal()
-
     ##  Called by OutputDeviceManager to indicate the plugin should start its device detection.
     def start(self):
-        self._check_updates = True
-        self._update_thread.start()
+        self._perform_discovery = True
+        self._discovery_thread.start()
 
     ##  Called by OutputDeviceManager to indicate the plugin should stop its device detection.
     def stop(self):
-        self._check_updates = False
+        self._perform_discovery = False
 
-    ##  Create a list of serial ports on the system.
-    def getSerialPortList(self):
+    ##  Get the list of serial ports on the system.
+    def getSerialPortList(self) -> List[str]:
         result = []
         for port in serial.tools.list_ports.comports():
             if not isinstance(port, tuple):
@@ -76,25 +70,81 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
 
         return result
 
-    def _updateThread(self):
-        while self._check_updates:
+    ## Sabotage USBPrinting plugin by replacing its port detection thread before it gets started
+    def _onPluginsLoaded(self) -> None:
+        try:
+            usb_printing_plugin = PluginRegistry.getInstance().getPluginObject("USBPrinting")
+        except PluginNotFoundError:
+            return
+
+        Logger.log("d", "Inhibiting serial port detection by the USB Printing plugin")
+        usb_printing_plugin._discovery_thread = threading.Thread(target = self._nilThread)
+
+    ## Thread-function that replaces the port detection thread in the USBPrinting plugin
+    def _nilThread(self) -> None:
+        Logger.log("d", "The USB serial port detection would start now, but has been inhibited by the Serial Connection plugin")
+        # This thread exits immediately because we don't want the USBPrinting plugin to find any ports
+
+    ## Thread-function to detect serial ports
+    def _discoveryThread(self) -> None:
+        while self._perform_discovery:
             port_list = self.getSerialPortList()
-            self._addRemovePorts(port_list)
+
+            # First, find and add all new or changed keys
+            for serial_port in port_list:
+                if serial_port not in self._serial_port_list:
+                    self.addInstanceSignal.emit(serial_port)  # Hack to ensure its created in main thread
+            for serial_port in self._serial_port_list:
+                if serial_port not in port_list:
+                    self.removeInstanceSignal.emit(serial_port)  # Hack to ensure its created in main thread
+
+            if port_list != self._serial_port_list:
+                self._serial_port_list = port_list
+                self.serialPortsChanged.emit()
+
             time.sleep(5)
 
-    ##  Helper to identify serial ports (and scan for them)
-    def _addRemovePorts(self, serial_ports):
-        # First, find and add all new or changed keys
-        for serial_port in list(serial_ports):
-            if serial_port not in self._serial_port_list:
-                self.addSerialPort.emit(serial_port)  # Hack to ensure its created in main thread
-        for serial_port in self._serial_port_list:
-            if serial_port not in serial_ports:
-                self.removeSerialPort.emit(serial_port)  # Hack to ensure its created in main thread
+    ## See if there's an instance that should be connected to the new global stack
+    def _onGlobalContainerStackChanged(self) -> None:
+        global_container_stack = self._application.getGlobalContainerStack()
+        if not global_container_stack:
+            return
 
-        if list(serial_ports) != self._serial_port_list:
-            self._serial_port_list = list(serial_ports)
-            self.serialPortsChanged.emit()
+        for key in self._instances:
+            if key == global_container_stack.getMetaDataEntry("serial_port"):
+                instance.setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
+                self._instances[key].connectionStateChanged.connect(self._onInstanceConnectionStateChanged)
+                self._instances[key].connect()
+            else:
+                if self._instances[key].isConnected():
+                    self._instances[key].close()
+
+    ##  Because the model needs to be created in the same thread as the QMLEngine, we use a signal.
+    def _onAddInstance(self, serial_port: str) -> None:
+        instance = SerialOutputDevice.SerialOutputDevice(serial_port)
+        self._instances[instance.getId()] = instance
+        global_container_stack = self._application.getGlobalContainerStack()
+        if global_container_stack and instance.getId() == global_container_stack.getMetaDataEntry("serial_port"):
+            instance.setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
+            instance.connectionStateChanged.connect(self._onInstanceConnectionStateChanged)
+            instance.connect()
+
+    def _onRemoveInstance(self, name: str) -> None:
+        instance = self._instances.pop(name, None)
+        if instance:
+            if instance.isConnected():
+                instance.connectionStateChanged.disconnect(self._onInstanceConnectionStateChanged)
+                instance.disconnect()
+
+    ##  Handler for when the connection state of one of the detected instances changes
+    def _onInstanceConnectionStateChanged(self, key: str) -> None:
+        if key not in self._instances:
+            return
+
+        if self._instances[key].isConnected():
+            self.getOutputDeviceManager().addOutputDevice(self._instances[key])
+        else:
+            self.getOutputDeviceManager().removeOutputDevice(key)
 
 
     __instance = None # type: SerialOutputDevicePlugin

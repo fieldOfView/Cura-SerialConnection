@@ -15,8 +15,8 @@ from cura.PrinterOutput.GenericOutputController import GenericOutputController
 
 #from .AvrFirmwareUpdater import AvrFirmwareUpdater
 
-from printrun.printcore import printcore
-from printrun import gcoder
+from .printrun.printcore import printcore
+from .printrun import gcoder
 
 import os
 import re
@@ -32,7 +32,7 @@ catalog = i18nCatalog("cura")
 
 
 class SerialOutputDevice(PrinterOutputDevice):
-    def __init__(self, serial_port: str, baud_rate: int = None) -> None:
+    def __init__(self, serial_port: str) -> None:
         super().__init__(serial_port, connection_type = ConnectionType.UsbConnection)
         self.setName(catalog.i18nc("@item:inmenu", "Serial printing"))
         self.setShortDescription(catalog.i18nc("@action:button Preceded by 'Ready to'.", "Print to %s") % serial_port)
@@ -40,7 +40,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self.setIconName("print")
 
         self._address = serial_port
-        self._serial = printcore(serial_port, baudrate)
+        self._serial = printcore(serial_port, baud_rate)
 
         self._last_temperature_request = None  # type: Optional[int]
         self._firmware_idle_count = 0
@@ -60,6 +60,10 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._monitor_view_qml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MonitorItem.qml")
 
         CuraApplication.getInstance().getOnExitCallbackManager().addCallback(self._checkActivePrintingUponAppExit)
+
+    def setBaudRate(self, baud_rate: int) -> None:
+        self._baud_rate = baud_rate
+        self._serial.baud = baud_rate
 
     # This is a callback function that checks if there is any printing in progress via USB when the application tries
     # to exit. If so, it will show a confirmation before
@@ -110,7 +114,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         if not success:
             return
 
-        gcode = gcode_textio.getvalue())
+        gcode = gcode_textio.getvalue()
 
         gcode_lines = gcode.split("\n")
         gcode_lines = gcoder.LightGCode(gcode_lines)
