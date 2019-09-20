@@ -1,9 +1,9 @@
 {
     "name": "Serial Connection",
     "author": "fieldOfView",
-    "version": "3.5.0",
+    "version": "4.0.0",
     "description": "Enables printing to (USB) serial ports using PrintRun/PrintCore",
-    "api": 5,
-    "supported_sdk_versions": ["5.0.0", "6.0.0", "6.1.0", "6.2.0"],
+    "api": 6,
+    "supported_sdk_versions": ["6.0.0", "6.1.0", "6.2.0"],
     "i18n-catalog": "cura"
 }

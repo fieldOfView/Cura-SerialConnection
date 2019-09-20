@@ -9,9 +9,17 @@ from UM.PluginRegistry import PluginRegistry #To get the g-code output.
 from UM.Qt.Duration import DurationFormat
 
 from cura.CuraApplication import CuraApplication
-from cura.PrinterOutput.PrinterOutputDevice import PrinterOutputDevice, ConnectionState, ConnectionType
-from cura.PrinterOutput.Models.PrinterOutputModel import PrinterOutputModel
-from cura.PrinterOutput.GenericOutputController import GenericOutputController
+
+try:
+    # Cura 4.1 and newer
+    from cura.PrinterOutput.PrinterOutputDevice import PrinterOutputDevice, ConnectionState, ConnectionType
+    from cura.PrinterOutput.Models.PrinterOutputModel import PrinterOutputModel
+    from cura.PrinterOutput.Models.PrintJobOutputModel import PrintJobOutputModel
+except ImportError:
+    # Cura 4.0
+    from cura.PrinterOutputDevice import PrinterOutputDevice, ConnectionState, ConnectionType
+    from cura.PrinterOutput.PrinterOutputModel import PrinterOutputModel
+    from cura.PrinterOutput.PrintJobOutputModel import PrintJobOutputModel
 
 #from .AvrFirmwareUpdater import AvrFirmwareUpdater
 
