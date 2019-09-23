@@ -9,6 +9,7 @@ from UM.PluginRegistry import PluginRegistry #To get the g-code output.
 from UM.Qt.Duration import DurationFormat
 
 from cura.CuraApplication import CuraApplication
+from cura.PrinterOutput.GenericOutputController import GenericOutputController
 
 try:
     # Cura 4.1 and newer
@@ -23,14 +24,19 @@ except ImportError:
 
 #from .AvrFirmwareUpdater import AvrFirmwareUpdater
 
-from .printrun.printcore import printcore
-from .printrun import gcoder
-
 import os
+import sys
 import re
 from io import StringIO #To write the g-code output.
 from time import time
 from typing import Union, Optional, List, cast, TYPE_CHECKING
+
+# fix nested importing for printrun files
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+from .printrun.printcore import printcore
+from .printrun import gcoder
+del sys.path[-1]
+
 
 if TYPE_CHECKING:
     from UM.FileHandler.FileHandler import FileHandler
@@ -48,7 +54,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self.setIconName("print")
 
         self._address = serial_port
-        self._serial = printcore(serial_port, baud_rate)
+        self._serial = printcore(serial_port, None) # because no baudrate is specified, the port is not opened at this point
 
         self._last_temperature_request = None  # type: Optional[int]
         self._firmware_idle_count = 0
