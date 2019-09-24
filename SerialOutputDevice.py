@@ -53,8 +53,11 @@ class SerialOutputDevice(PrinterOutputDevice):
         self.setDescription(catalog.i18nc("@info:tooltip", "Print via serial port"))
         self.setIconName("print")
 
+        Logger.log("d", "Creating printcore instance for port %s", serial_port)
+
         self._address = serial_port
-        self._serial = printcore(serial_port, None) # because no baudrate is specified, the port is not opened at this point
+        self._serial = printcore() # because no port and baudrate is specified, the port is not opened at this point
+        self._serial.port = serial_port
 
         self._last_temperature_request = None  # type: Optional[int]
         self._firmware_idle_count = 0
@@ -76,8 +79,9 @@ class SerialOutputDevice(PrinterOutputDevice):
         CuraApplication.getInstance().getOnExitCallbackManager().addCallback(self._checkActivePrintingUponAppExit)
 
     def setBaudRate(self, baud_rate: int) -> None:
-        self._baud_rate = baud_rate
+        Logger.log("d", "Connecting printcore on port %s at baud %s", self._serial.port, baud_rate)
         self._serial.baud = baud_rate
+        self._serial.connect()
 
     # This is a callback function that checks if there is any printing in progress via USB when the application tries
     # to exit. If so, it will show a confirmation before
@@ -172,6 +176,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             new_command += "\n"
 
         self._serial.send(new_command)
+        Logger.log("d", "Send gcode command to serial port: %s", new_command)
 
     def _setFirmwareName(self, name):
         new_name = re.findall(r"FIRMWARE_NAME:(.*);", str(name))
