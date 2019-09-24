@@ -78,7 +78,7 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
             return
 
         Logger.log("d", "Inhibiting serial port detection by the USB Printing plugin")
-        usb_printing_plugin._discovery_thread = threading.Thread(target = self._nilThread)
+        usb_printing_plugin._update_thread = threading.Thread(target = self._nilThread)
 
     ## Thread-function that replaces the port detection thread in the USBPrinting plugin
     def _nilThread(self) -> None:
