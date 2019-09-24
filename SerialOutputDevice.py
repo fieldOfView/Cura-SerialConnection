@@ -58,10 +58,11 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._address = serial_port
         self._serial = printcore() # because no port and baudrate is specified, the port is not opened at this point
         self._serial.port = serial_port
-        self._serial.tempcb = self._onTemperatureLineReceived
+        self._serial.recvcb = self._onLineReceived
+        self._serial.onlinecb = self._onPrinterOnline
 
-        self._last_temperature_request = None  # type: Optional[int]
-        self._firmware_idle_count = 0
+        self._firmware_name = ""
+        self._firmware_capabilities = {}  # type: Dict[str, bool]
 
         self._is_printing = False  # A print is being sent.
 
@@ -100,11 +101,6 @@ class SerialOutputDevice(PrinterOutputDevice):
         if result:
             application = CuraApplication.getInstance()
             application.triggerNextExitCheck()
-
-    ## Reset USB device settings
-    #
-    def resetDeviceSettings(self) -> None:
-        self._firmware_name = None
 
     ##  Request the current scene to be sent to a USB-connected printer.
     #
@@ -146,7 +142,8 @@ class SerialOutputDevice(PrinterOutputDevice):
         self.writeFinished.emit(self)
 
     def connect(self):
-        self._firmware_name = None  # after each connection ensure that the firmware name is removed
+        self._firmware_name = ""  # after each connection ensure that the firmware name is removed
+        self._firmware_capabilities = {}  # type: Dict[str, bool]
         self._serial.connect()
 
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._onGlobalContainerStackChanged)
@@ -179,17 +176,25 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.send(new_command)
         Logger.log("d", "Send gcode command to serial port: %s", new_command)
 
-    def _setFirmwareName(self, name):
-        new_name = re.findall(r"FIRMWARE_NAME:(.*);", str(name))
-        if  new_name:
-            self._firmware_name = new_name[0]
+    def _setFirmwareName(self, line):
+        name = re.findall(r"FIRMWARE_NAME:(.*);", line)
+        if  name:
+            self._firmware_name = name[0]
             Logger.log("i", "USB output device Firmware name: %s", self._firmware_name)
         else:
             self._firmware_name = "Unknown"
-            Logger.log("i", "Unknown USB output device Firmware name: %s", str(name))
+            Logger.log("i", "Unknown USB output device firmware name: %s", line)
 
     def getFirmwareName(self):
         return self._firmware_name
+
+    def _registerFirmwareCapability(self, line):
+        cap = re.findall(r"Cap:(.*\:[01])", line)
+        if cap:
+            bits = cap.split(":")
+            self._firmware_capabilities[bits[0]] = True if bits[1] == "1" else False
+        else:
+            Logger.log("i", "Unparseable firmware capability: %s", line)
 
     def pausePrint(self):
         self._serial.pause()
@@ -211,6 +216,19 @@ class SerialOutputDevice(PrinterOutputDevice):
         # Don't home bed because it may crash the printhead into the print on printers that home on the bottom
         self.printers[0].homeHead()
         self._sendCommand("M84")
+
+    def _onPrinterOnline(self):
+        self.sendCommand("M115") # request firmware name and capabilities
+
+    def _onLineReceived(self, line):
+        if "FIRMWARE_NAME:" in line:
+            self._setFirmwareName(line)
+
+        if "Cap:" in line:
+            self._registerFirmwareCapability(line)
+
+        if " T:" in line:
+            self._onTemperatureLineReceived(line)
 
     def _onTemperatureLineReceived(self, line):
         extruder_temperature_matches = re.findall("T(\d*): ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
