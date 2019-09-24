@@ -58,6 +58,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._address = serial_port
         self._serial = printcore() # because no port and baudrate is specified, the port is not opened at this point
         self._serial.port = serial_port
+        self._serial.tempcb = self._onTemperatureLineReceived
 
         self._last_temperature_request = None  # type: Optional[int]
         self._firmware_idle_count = 0
@@ -210,3 +211,34 @@ class SerialOutputDevice(PrinterOutputDevice):
         # Don't home bed because it may crash the printhead into the print on printers that home on the bottom
         self.printers[0].homeHead()
         self._sendCommand("M84")
+
+    def _onTemperatureLineReceived(self, line):
+        extruder_temperature_matches = re.findall("T(\d*): ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
+        # Update all temperature values
+        matched_extruder_nrs = []
+        for match in extruder_temperature_matches:
+            extruder_nr = 0
+            if match[0] != "":
+                extruder_nr = int(match[0])
+
+            if extruder_nr in matched_extruder_nrs:
+                continue
+            matched_extruder_nrs.append(extruder_nr)
+
+            if extruder_nr >= len(self._printers[0].extruders):
+                Logger.log("w", "Printer reports more temperatures than the number of configured extruders")
+                continue
+
+            extruder = self._printers[0].extruders[extruder_nr]
+            if match[1]:
+                extruder.updateHotendTemperature(float(match[1]))
+            if match[2]:
+                extruder.updateTargetHotendTemperature(float(match[2]))
+
+        bed_temperature_matches = re.findall("B: ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
+        if bed_temperature_matches:
+            match = bed_temperature_matches[0]
+            if match[0]:
+                self._printers[0].updateBedTemperature(float(match[0]))
+            if match[1]:
+                self._printers[0].updateTargetBedTemperature(float(match[1]))
