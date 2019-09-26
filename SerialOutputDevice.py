@@ -60,6 +60,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.port = serial_port
         self._serial.recvcb = self._onLineReceived
         self._serial.onlinecb = self._onPrinterOnline
+        self._serial.endcb = self._onPrintEnded
 
         self._firmware_name = ""
         self._firmware_capabilities = {}  # type: Dict[str, bool]
@@ -203,31 +204,26 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.resume()
 
     def cancelPrint(self):
-        self._serial.cancelprint()
-        self._printers[0].updateActivePrintJob(None)
-        self._is_printing = False
-
-        # Turn off temperatures, fan and steppers
-        self._sendCommand("M140 S0")
-        self._sendCommand("M104 S0")
-        self._sendCommand("M107")
-
-        # Home XY to prevent nozzle resting on aborted print
-        # Don't home bed because it may crash the printhead into the print on printers that home on the bottom
-        self.printers[0].homeHead()
-        self._sendCommand("M84")
+        self._serial.cancelprint() # this also calls the ended callback
 
     def _onPrinterOnline(self):
         self.sendCommand("M115") # request firmware name and capabilities
 
     def _onLineReceived(self, line):
+        if line.startswith('!!'):
+            Logger.log('e', "Printer signals fatal error. Cancelling print. {}".format(line))
+            self.cancelPrint()
+            return
+
         if "FIRMWARE_NAME:" in line:
             self._setFirmwareName(line)
+            return
 
         if "Cap:" in line:
             self._registerFirmwareCapability(line)
+            return
 
-        if " T:" in line:
+        if " T:" in line or " B:" in line:
             self._onTemperatureLineReceived(line)
 
     def _onTemperatureLineReceived(self, line):
@@ -260,3 +256,18 @@ class SerialOutputDevice(PrinterOutputDevice):
                 self._printers[0].updateBedTemperature(float(match[0]))
             if match[1]:
                 self._printers[0].updateTargetBedTemperature(float(match[1]))
+
+    def _onPrintEnded(self):
+        self._printers[0].updateActivePrintJob(None)
+        self._is_printing = False
+
+        # Turn off temperatures, fan and steppers
+        self._sendCommand("M140 S0")
+        self._sendCommand("M104 S0")
+        self._sendCommand("M107")
+
+        # Home XY to prevent nozzle resting on aborted print
+        # Don't home bed because it may crash the printhead into the print on printers that home on the bottom
+        self.printers[0].homeHead()
+        # Disable steppers
+        self._sendCommand("M84")
