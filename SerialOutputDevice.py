@@ -60,6 +60,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.port = serial_port
         self._serial.recvcb = self._onLineReceived
         self._serial.onlinecb = self._onPrinterOnline
+        self._serial.printsendcb = self._onPrintProgess
         self._serial.endcb = self._onPrintEnded
 
         self._firmware_name = ""
@@ -70,6 +71,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         ## Set when print is started in order to check running time.
         self._print_start_time = None  # type: Optional[float]
         self._print_estimated_time = None  # type: Optional[int]
+        self._line_count = 0
 
         self._accepts_commands = True
 
@@ -134,6 +136,7 @@ class SerialOutputDevice(PrinterOutputDevice):
 
         gcode_lines = gcode.split("\n")
         gcode_lines = gcoder.LightGCode(gcode_lines)
+        self._line_count = len(gcode_lines)
         self._serial.startprint(gcode_lines) # this will start a print
 
         self._print_start_time = time()
@@ -142,7 +145,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._is_printing = True
         self.writeFinished.emit(self)
 
-    def connect(self):
+    def connect(self) -> None:
         self._firmware_name = ""  # after each connection ensure that the firmware name is removed
         self._firmware_capabilities = {}  # type: Dict[str, bool]
         self._serial.connect()
@@ -151,7 +154,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._onGlobalContainerStackChanged()
         self.setConnectionState(ConnectionState.Connected)
 
-    def _onGlobalContainerStackChanged(self):
+    def _onGlobalContainerStackChanged(self) -> None:
         container_stack = CuraApplication.getInstance().getGlobalContainerStack()
         num_extruders = container_stack.getProperty("machine_extruder_count", "value")
         # Ensure that a printer is created.
@@ -160,13 +163,13 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._printers = [PrinterOutputModel(output_controller = controller, number_of_extruders = num_extruders)]
         self._printers[0].updateName(container_stack.getName())
 
-    def close(self):
+    def close(self) -> None:
         super().close()
         self._serial.disconnect()
 
 
     ##  Send a command to printer.
-    def sendCommand(self, command: Union[str, bytes]):
+    def sendCommand(self, command: Union[str, bytes]) -> None:
         if  self._connection_state != ConnectionState.Connected:
             return
 
@@ -177,7 +180,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.send(new_command)
         Logger.log("d", "Send gcode command to serial port: %s", new_command)
 
-    def _setFirmwareName(self, line):
+    def _setFirmwareName(self, line) -> None:
         name = re.findall(r"FIRMWARE_NAME:(.*);", line)
         if  name:
             self._firmware_name = name[0]
@@ -186,10 +189,10 @@ class SerialOutputDevice(PrinterOutputDevice):
             self._firmware_name = "Unknown"
             Logger.log("i", "Unknown USB output device firmware name: %s", line)
 
-    def getFirmwareName(self):
+    def getFirmwareName(self) -> str:
         return self._firmware_name
 
-    def _registerFirmwareCapability(self, line):
+    def _registerFirmwareCapability(self, line: str) -> None:
         cap = re.findall(r"Cap:(.*\:[01])", line)
         if cap:
             bits = cap.split(":")
@@ -197,22 +200,23 @@ class SerialOutputDevice(PrinterOutputDevice):
         else:
             Logger.log("i", "Unparseable firmware capability: %s", line)
 
-    def pausePrint(self):
+    def pausePrint(self) -> None:
         self._serial.pause()
 
-    def resumePrint(self):
+    def resumePrint(self) -> None:
         self._serial.resume()
 
-    def cancelPrint(self):
+    def cancelPrint(self) -> None:
         self._serial.cancelprint() # this also calls the ended callback
 
-    def _onPrinterOnline(self):
+    def _onPrinterOnline(self) -> None:
         self.sendCommand("M115") # request firmware name and capabilities
 
-    def _onLineReceived(self, line):
+    def _onLineReceived(self, line: str) -> None:
         if line.startswith('!!'):
             Logger.log('e', "Printer signals fatal error. Cancelling print. {}".format(line))
             self.cancelPrint()
+            print_job.updateState("error")
             return
 
         if "FIRMWARE_NAME:" in line:
@@ -226,7 +230,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         if " T:" in line or " B:" in line:
             self._onTemperatureLineReceived(line)
 
-    def _onTemperatureLineReceived(self, line):
+    def _onTemperatureLineReceived(self, line: str) -> None:
         extruder_temperature_matches = re.findall("T(\d*): ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
         # Update all temperature values
         matched_extruder_nrs = []
@@ -257,7 +261,33 @@ class SerialOutputDevice(PrinterOutputDevice):
             if match[1]:
                 self._printers[0].updateTargetBedTemperature(float(match[1]))
 
-    def _onPrintEnded(self):
+    def _onPrintProgress(self, gline) -> None:
+        print_job = self._printers[0].activePrintJob
+        if print_job is None:
+            controller = cast(GenericOutputController, self._printers[0].getController())
+            print_job = PrintJobOutputModel(output_controller=controller, name=CuraApplication.getInstance().getPrintInformation().jobName)
+            print_job.updateState("printing")
+            self._printers[0].updateActivePrintJob(print_job)
+
+        line_number = self._serial.lineno
+        try:
+            progress = line_number / self._line_count
+        except ZeroDivisionError:
+            # There is nothing to send!
+            if print_job is not None:
+                print_job.updateState("error")
+            return
+
+        elapsed_time = int(time() - self._print_start_time)
+
+        print_job.updateTimeElapsed(elapsed_time)
+        estimated_time = self._print_estimated_time
+        if progress > .1:
+            estimated_time = self._print_estimated_time * (1 - progress) + elapsed_time
+        print_job.updateTimeTotal(estimated_time)
+
+
+    def _onPrintEnded(self) -> None:
         self._printers[0].updateActivePrintJob(None)
         self._is_printing = False
 
