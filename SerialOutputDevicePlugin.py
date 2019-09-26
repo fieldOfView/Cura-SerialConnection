@@ -49,14 +49,15 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
         self._perform_discovery = True
 
         application.pluginsLoaded.connect(self._onPluginsLoaded)
+        application.applicationShuttingDown.connect(self._onApplicationShuttingDown)
 
     ##  Called by OutputDeviceManager to indicate the plugin should start its device detection.
-    def start(self):
+    def start(self) -> None:
         self._perform_discovery = True
         self._discovery_thread.start()
 
     ##  Called by OutputDeviceManager to indicate the plugin should stop its device detection.
-    def stop(self):
+    def stop(self) -> None:
         self._perform_discovery = False
 
     ##  Get the list of serial ports on the system.
@@ -69,6 +70,13 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
             result.append(port[0])
 
         return result
+
+    def _onApplicationShuttingDown(self) -> None:
+        ## TODO: investigate why this is necessary
+        for key in self._instances:
+            if self._instances[key].isConnected():
+                self._instances[key].close()
+        self._instances = {} # type: Dict[str, SerialOutputDevice.SerialOutputDevice]
 
     ## Sabotage USBPrinting plugin by replacing its port detection thread before it gets started
     def _onPluginsLoaded(self) -> None:
@@ -133,8 +141,8 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
         instance = self._instances.pop(name, None)
         if instance:
             if instance.isConnected():
+                instance.close()
                 instance.connectionStateChanged.disconnect(self._onInstanceConnectionStateChanged)
-                instance.disconnect()
 
     ##  Handler for when the connection state of one of the detected instances changes
     def _onInstanceConnectionStateChanged(self, key: str) -> None:
