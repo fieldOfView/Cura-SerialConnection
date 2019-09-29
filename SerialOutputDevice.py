@@ -60,7 +60,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._serial.port = serial_port
         self._serial.recvcb = self._onLineReceived
         self._serial.onlinecb = self._onPrinterOnline
-        self._serial.printsendcb = self._onPrintProgess
+        self._serial.printsendcb = self._onPrintProgress
         self._serial.endcb = self._onPrintEnded
 
         self._firmware_name = ""
@@ -82,6 +82,10 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._monitor_view_qml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MonitorItem.qml")
 
         CuraApplication.getInstance().getOnExitCallbackManager().addCallback(self._checkActivePrintingUponAppExit)
+
+        self._M155_sent = False
+        self._M105_sent = False
+        self._last_temperature_line_received = 0
 
     def setBaudRate(self, baud_rate: int) -> None:
         Logger.log("d", "Connecting printcore on port %s at baud %s", self._serial.port, baud_rate)
@@ -177,7 +181,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         if not new_command.endswith("\n"):
             new_command += "\n"
 
-        self._serial.send(new_command)
+        self._serial.send_now(new_command)
         Logger.log("d", "Send gcode command to serial port: %s", new_command)
 
     def _setFirmwareName(self, line) -> None:
@@ -193,10 +197,11 @@ class SerialOutputDevice(PrinterOutputDevice):
         return self._firmware_name
 
     def _registerFirmwareCapability(self, line: str) -> None:
-        cap = re.findall(r"Cap:(.*\:[01])", line)
-        if cap:
-            bits = cap.split(":")
-            self._firmware_capabilities[bits[0]] = True if bits[1] == "1" else False
+        capabilities = re.findall(r"Cap:(.*\:[01])", line)
+        if capabilities:
+            for capability in capabilities:
+                bits = capability.split(":")
+                self._firmware_capabilities[bits[0]] = True if bits[1] == "1" else False
         else:
             Logger.log("i", "Unparseable firmware capability: %s", line)
 
@@ -211,6 +216,7 @@ class SerialOutputDevice(PrinterOutputDevice):
 
     def _onPrinterOnline(self) -> None:
         self.sendCommand("M115") # request firmware name and capabilities
+        self.sendCommand("M105") # request temperatures for the first time
 
     def _onLineReceived(self, line: str) -> None:
         if line.startswith('!!'):
@@ -230,7 +236,24 @@ class SerialOutputDevice(PrinterOutputDevice):
         if " T:" in line or " B:" in line:
             self._onTemperatureLineReceived(line)
 
+        if line.startswith("ok"):
+            # Check if temperature info is stale, but make sure not to pile up temperature requests
+            if time() - self._last_temperature_line_received > 3 and not self._M105_sent:
+                if not self._M155_sent and self._firmware_capabilities.get("AUTO_REPORT_TEMPERATURES" , False):
+                    # Start automatic temperature reporting every 2 seconds if supported by the firmware
+                    self.sendCommand("M155 S2")
+                    self._M155_sent = True
+                else:
+                    # Poll temperature once (every 3 seconds max)
+                    self.sendCommand("M105")
+                    self._M105_sent = True
+
+
     def _onTemperatureLineReceived(self, line: str) -> None:
+        self._last_temperature_line_received = time()
+        if line.startswith("ok"):
+            self._M105_sent = False  # this must be in response to an M105 command
+
         extruder_temperature_matches = re.findall("T(\d*): ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
         # Update all temperature values
         matched_extruder_nrs = []
