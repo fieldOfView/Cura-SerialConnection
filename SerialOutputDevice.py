@@ -59,6 +59,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._address = serial_port
         self._serial = printcore() # because no port and baudrate is specified, the port is not opened at this point
         self._serial.port = serial_port
+        self._serial.errorcb = self._onPrinterError
         self._serial.recvcb = self._onLineReceived
         self._serial.onlinecb = self._onPrinterOnline
         self._serial.printsendcb = self._onPrintProgress
@@ -92,6 +93,15 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._poll_temperature_timer.setSingleShot(False)
         self._poll_temperature_timer.timeout.connect(self._onPollTemperatureTimer)
         self._poll_temperature_timer.start()
+
+    def _onGlobalContainerStackChanged(self) -> None:
+        container_stack = CuraApplication.getInstance().getGlobalContainerStack()
+        num_extruders = container_stack.getProperty("machine_extruder_count", "value")
+        # Ensure that a printer is created.
+        controller = GenericOutputController(self)
+        controller.setCanUpdateFirmware(True)
+        self._printers = [PrinterOutputModel(output_controller = controller, number_of_extruders = num_extruders)]
+        self._printers[0].updateName(container_stack.getName())
 
     def setBaudRate(self, baud_rate: int) -> None:
         Logger.log("d", "Connecting printcore on port %s at baud %s", self._serial.port, baud_rate)
@@ -160,22 +170,17 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._firmware_capabilities = {}  # type: Dict[str, bool]
         self._serial.connect()
 
+        self.setConnectionState(ConnectionState.Connecting)
+
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._onGlobalContainerStackChanged)
         self._onGlobalContainerStackChanged()
-        self.setConnectionState(ConnectionState.Connected)
-
-    def _onGlobalContainerStackChanged(self) -> None:
-        container_stack = CuraApplication.getInstance().getGlobalContainerStack()
-        num_extruders = container_stack.getProperty("machine_extruder_count", "value")
-        # Ensure that a printer is created.
-        controller = GenericOutputController(self)
-        controller.setCanUpdateFirmware(True)
-        self._printers = [PrinterOutputModel(output_controller = controller, number_of_extruders = num_extruders)]
-        self._printers[0].updateName(container_stack.getName())
 
     def close(self) -> None:
         super().close()
         self._serial.disconnect()
+
+    def isOnline(self) -> bool:
+        return self._serial.online
 
 
     ##  Send a command to printer.
@@ -229,7 +234,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         if self._awaiting_M105_response or time() - self._last_temperature_line_received < 2:
             return
 
-        if self._firmware_capabilities.get("AUTO_REPORT_TEMPERATURES" , False):
+        if self._firmware_capabilities.get("AUTOREPORT_TEMP" , False):
             # Start automatic temperature reporting every 2 seconds if supported by the firmware
             Logger.log('i', "Printer supports automatic temperature reporting, so polling is unnecessary.")
             self.sendCommand("M155 S2")
@@ -239,8 +244,13 @@ class SerialOutputDevice(PrinterOutputDevice):
             self.sendCommand("M105")
             self._awaiting_M105_response = True
 
+    def _onPrinterError(self, error_string: str) -> None:
+        Logger.log("e", error_string)
+        self.setConnectionState(ConnectionState.Error)
+
     # Called by printcore.onlinecb
     def _onPrinterOnline(self) -> None:
+        self.setConnectionState(ConnectionState.Connected)
         self.sendCommand("M115") # request firmware name and capabilities
 
     # Called by printcore.recvcb

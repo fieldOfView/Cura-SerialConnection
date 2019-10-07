@@ -120,12 +120,12 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
 
         for key in self._instances:
             if key == global_container_stack.getMetaDataEntry("serial_port"):
-                instance.setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
                 self._instances[key].connectionStateChanged.connect(self._onInstanceConnectionStateChanged)
-                self._instances[key].connect()
+                if not self._instances[key].isOnline():
+                    self._instances[key].setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
+                    self._instances[key].connect()
             else:
-                if self._instances[key].isConnected():
-                    self._instances[key].close()
+                self._instances[key].connectionStateChanged.disconnect(self._onInstanceConnectionStateChanged)
 
     ##  Because the model needs to be created in the same thread as the QMLEngine, we use a signal.
     def _onAddInstance(self, serial_port: str) -> None:
