@@ -24,6 +24,8 @@ except ImportError:
 
 #from .AvrFirmwareUpdater import AvrFirmwareUpdater
 
+from PyQt5.QtCore import QTimer
+
 import os
 import sys
 import re
@@ -36,7 +38,6 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 from .printrun.printcore import printcore
 from .printrun import gcoder
 del sys.path[-1]
-
 
 if TYPE_CHECKING:
     from UM.FileHandler.FileHandler import FileHandler
@@ -83,9 +84,14 @@ class SerialOutputDevice(PrinterOutputDevice):
 
         CuraApplication.getInstance().getOnExitCallbackManager().addCallback(self._checkActivePrintingUponAppExit)
 
-        self._M155_sent = False
-        self._M105_sent = False
+        self._awaiting_M105_response = False
         self._last_temperature_line_received = 0
+
+        self._poll_temperature_timer = QTimer()
+        self._poll_temperature_timer.setInterval(2000)
+        self._poll_temperature_timer.setSingleShot(False)
+        self._poll_temperature_timer.timeout.connect(self._onPollTemperatureTimer)
+        self._poll_temperature_timer.start()
 
     def setBaudRate(self, baud_rate: int) -> None:
         Logger.log("d", "Connecting printcore on port %s at baud %s", self._serial.port, baud_rate)
@@ -214,13 +220,33 @@ class SerialOutputDevice(PrinterOutputDevice):
     def cancelPrint(self) -> None:
         self._serial.cancelprint() # this also calls the ended callback
 
+    ## Check if temperature info is stale
+    def _onPollTemperatureTimer(self) -> None:
+        if not self._serial.online:
+            return
+
+        # Make sure not to pile up temperature requests
+        if self._awaiting_M105_response or time() - self._last_temperature_line_received < 2:
+            return
+
+        if self._firmware_capabilities.get("AUTO_REPORT_TEMPERATURES" , False):
+            # Start automatic temperature reporting every 2 seconds if supported by the firmware
+            Logger.log('i', "Printer supports automatic temperature reporting, so polling is unnecessary.")
+            self.sendCommand("M155 S2")
+            self._poll_temperature_timer.stop()
+        else:
+            # Poll temperature once
+            self.sendCommand("M105")
+            self._awaiting_M105_response = True
+
+    # Called by printcore.onlinecb
     def _onPrinterOnline(self) -> None:
         self.sendCommand("M115") # request firmware name and capabilities
-        self.sendCommand("M105") # request temperatures for the first time
 
+    # Called by printcore.recvcb
     def _onLineReceived(self, line: str) -> None:
         if line.startswith('!!'):
-            Logger.log('e', "Printer signals fatal error. Cancelling print. {}".format(line))
+            Logger.log('e', "Printer signals fatal error. Cancelling print. Printer response: {}".format(line))
             self.cancelPrint()
             print_job.updateState("error")
             return
@@ -234,25 +260,15 @@ class SerialOutputDevice(PrinterOutputDevice):
             return
 
         if " T:" in line or " B:" in line:
-            self._onTemperatureLineReceived(line)
+            self._parseTemperatures(line)
 
         if line.startswith("ok"):
-            # Check if temperature info is stale, but make sure not to pile up temperature requests
-            if time() - self._last_temperature_line_received > 3 and not self._M105_sent:
-                if not self._M155_sent and self._firmware_capabilities.get("AUTO_REPORT_TEMPERATURES" , False):
-                    # Start automatic temperature reporting every 2 seconds if supported by the firmware
-                    self.sendCommand("M155 S2")
-                    self._M155_sent = True
-                else:
-                    # Poll temperature once (every 3 seconds max)
-                    self.sendCommand("M105")
-                    self._M105_sent = True
+            pass
 
-
-    def _onTemperatureLineReceived(self, line: str) -> None:
+    def _parseTemperatures(self, line: str) -> None:
         self._last_temperature_line_received = time()
         if line.startswith("ok"):
-            self._M105_sent = False  # this must be in response to an M105 command
+            self._awaiting_M105_response = False  # this must be in response to an M105 command
 
         extruder_temperature_matches = re.findall("T(\d*): ?(\d+\.?\d*)\s*\/?(\d+\.?\d*)?", line)
         # Update all temperature values
@@ -284,6 +300,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             if match[1]:
                 self._printers[0].updateTargetBedTemperature(float(match[1]))
 
+    # Called by printcore._printsendcb
     def _onPrintProgress(self, gline) -> None:
         print_job = self._printers[0].activePrintJob
         if print_job is None:
@@ -309,7 +326,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             estimated_time = self._print_estimated_time * (1 - progress) + elapsed_time
         print_job.updateTimeTotal(estimated_time)
 
-
+    # Called by printcore.endcb
     def _onPrintEnded(self) -> None:
         self._printers[0].updateActivePrintJob(None)
         self._is_printing = False
