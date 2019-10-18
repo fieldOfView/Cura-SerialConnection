@@ -7,6 +7,7 @@ from UM.Logger import Logger
 from UM.Signal import Signal, signalemitter
 from UM.PluginRegistry import PluginRegistry
 from UM.PluginError import PluginNotFoundError
+from UM.Util import parseBool
 
 from . import SerialOutputDevice
 
@@ -134,7 +135,7 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
         global_container_stack = self._application.getGlobalContainerStack()
         if global_container_stack and instance.getId() == global_container_stack.getMetaDataEntry("serial_port"):
             instance.setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
-            instance.setAutoConnect(global_container_stack.getMetaDataEntry("serial_auto_connect"))
+            instance.setAutoConnect(parseBool(global_container_stack.getMetaDataEntry("serial_auto_connect")))
             instance.connectionStateChanged.connect(self._onInstanceConnectionStateChanged)
             instance.connect()
 
