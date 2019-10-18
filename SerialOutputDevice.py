@@ -24,7 +24,7 @@ except ImportError:
 
 #from .AvrFirmwareUpdater import AvrFirmwareUpdater
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSlot
 
 import os
 import sys
@@ -57,13 +57,12 @@ class SerialOutputDevice(PrinterOutputDevice):
         Logger.log("d", "Creating printcore instance for port %s", serial_port)
 
         self._address = serial_port
+        self._baud_rate = 0
+        self._auto_connect = False
+
         self._serial = printcore() # because no port and baudrate is specified, the port is not opened at this point
         self._serial.port = serial_port
-        self._serial.errorcb = self._onPrinterError
-        self._serial.recvcb = self._onLineReceived
-        self._serial.onlinecb = self._onPrinterOnline
-        self._serial.printsendcb = self._onPrintProgress
-        self._serial.endcb = self._onPrintEnded
+        self._serial.addEventHandler(_PrintCoreEventHandler(self))
 
         self._firmware_name = ""
         self._firmware_capabilities = {}  # type: Dict[str, bool]
@@ -75,7 +74,7 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._print_estimated_time = None  # type: Optional[int]
         self._line_count = 0
 
-        self._accepts_commands = True
+        self._accepts_commands = False
 
         self.setConnectionText(catalog.i18nc("@info:status", "Connected via Serial Port"))
 
@@ -92,7 +91,6 @@ class SerialOutputDevice(PrinterOutputDevice):
         self._poll_temperature_timer.setInterval(2000)
         self._poll_temperature_timer.setSingleShot(False)
         self._poll_temperature_timer.timeout.connect(self._onPollTemperatureTimer)
-        self._poll_temperature_timer.start()
 
     def _onGlobalContainerStackChanged(self) -> None:
         container_stack = CuraApplication.getInstance().getGlobalContainerStack()
@@ -102,11 +100,6 @@ class SerialOutputDevice(PrinterOutputDevice):
         controller.setCanUpdateFirmware(True)
         self._printers = [PrinterOutputModel(output_controller = controller, number_of_extruders = num_extruders)]
         self._printers[0].updateName(container_stack.getName())
-
-    def setBaudRate(self, baud_rate: int) -> None:
-        Logger.log("d", "Connecting printcore on port %s at baud %s", self._serial.port, baud_rate)
-        self._serial.baud = baud_rate
-        self._serial.connect()
 
     # This is a callback function that checks if there is any printing in progress via USB when the application tries
     # to exit. If so, it will show a confirmation before
@@ -138,6 +131,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             message = Message(text = catalog.i18nc("@message", "A print is still in progress. Cura cannot start another print via USB until the previous print has completed."), title = catalog.i18nc("@message", "Print in Progress"))
             message.show()
             return  # Already printing
+
         self.writeStarted.emit(self)
         # cancel any ongoing preheat timer before starting a print
         controller = cast(GenericOutputController, self._printers[0].getController())
@@ -168,15 +162,46 @@ class SerialOutputDevice(PrinterOutputDevice):
     def connect(self) -> None:
         self._firmware_name = ""  # after each connection ensure that the firmware name is removed
         self._firmware_capabilities = {}  # type: Dict[str, bool]
-        self._serial.connect()
 
-        self.setConnectionState(ConnectionState.Connecting)
+        if self._connection_state != ConnectionState.Connected:
+            self.setConnectionState(ConnectionState.Connecting)
 
         CuraApplication.getInstance().globalContainerStackChanged.connect(self._onGlobalContainerStackChanged)
         self._onGlobalContainerStackChanged()
 
+        if self._auto_connect and not self.isOnline():
+            self.goOnline()
+
+        self._poll_temperature_timer.start()
+
+
     def close(self) -> None:
         super().close()
+        self._poll_temperature_timer.stop()
+
+    def setBaudRate(self, baud_rate: int) -> None:
+        if not self.isOnline():
+            self._baud_rate = baud_rate
+            self._serial.baud = baud_rate
+
+    def baudRate(self) -> int:
+        return self._baud_rate
+
+    def setAutoConnect(self, auto_connect: bool) -> None:
+        self._auto_connect = auto_connect
+        if self._auto_connect:
+            if not self.isOnline():
+                self.goOnline()
+        else:
+            if self.isOnline() and not self._is_printing:
+                self.goOffline()
+
+    @pyqtSlot()
+    def goOnline(self):
+        self._serial.connect()
+
+    @pyqtSlot()
+    def goOffline(self):
         self._serial.disconnect()
 
     def isOnline(self) -> bool:
@@ -244,17 +269,20 @@ class SerialOutputDevice(PrinterOutputDevice):
             self.sendCommand("M105")
             self._awaiting_M105_response = True
 
-    def _onPrinterError(self, error_string: str) -> None:
+    def onPrinterError(self, error_string: str) -> None:
         Logger.log("e", error_string)
+        self._serial.disconnect()
         self.setConnectionState(ConnectionState.Error)
 
-    # Called by printcore.onlinecb
-    def _onPrinterOnline(self) -> None:
+    def onPrinterOnline(self) -> None:
         self.setConnectionState(ConnectionState.Connected)
         self.sendCommand("M115") # request firmware name and capabilities
+        self._setAcceptsCommands(True)
 
-    # Called by printcore.recvcb
-    def _onLineReceived(self, line: str) -> None:
+    def onPrinterOffline(self) -> None:
+        self._setAcceptsCommands(False)
+
+    def onLineReceived(self, line: str) -> None:
         if line.startswith('!!'):
             Logger.log('e', "Printer signals fatal error. Cancelling print. Printer response: {}".format(line))
             self.cancelPrint()
@@ -310,8 +338,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             if match[1]:
                 self._printers[0].updateTargetBedTemperature(float(match[1]))
 
-    # Called by printcore._printsendcb
-    def _onPrintProgress(self, gline) -> None:
+    def onPrintProgress(self, gline) -> None:
         print_job = self._printers[0].activePrintJob
         if print_job is None:
             controller = cast(GenericOutputController, self._printers[0].getController())
@@ -336,8 +363,7 @@ class SerialOutputDevice(PrinterOutputDevice):
             estimated_time = self._print_estimated_time * (1 - progress) + elapsed_time
         print_job.updateTimeTotal(estimated_time)
 
-    # Called by printcore.endcb
-    def _onPrintEnded(self) -> None:
+    def onPrintEnded(self) -> None:
         self._printers[0].updateActivePrintJob(None)
         self._is_printing = False
 
@@ -351,3 +377,49 @@ class SerialOutputDevice(PrinterOutputDevice):
         self.printers[0].homeHead()
         # Disable steppers
         self._sendCommand("M84")
+
+
+class _PrintCoreEventHandler():
+    def __init__(self, device: SerialOutputDevice) -> None:
+        self._device = device
+
+    def on_init(self) -> None:
+        pass
+
+    def on_error(self, error) -> None:
+        self._device.onPrinterError(error)
+
+    def on_connect(self) -> None:
+        pass
+
+    def on_disconnect(self) -> None:
+        self._device.onPrinterOffline()
+
+    def on_online(self) -> None:
+        self._device.onPrinterOnline()
+
+
+    def on_recv(self, line) -> None:
+        self._device.onLineReceived(line)
+
+    def on_temp(self, line) -> None:
+        # handled in onLineReceived()
+        pass
+
+    def on_start(self, resuming) -> None:
+        pass
+
+    def on_end(self) -> None:
+        self._device.onPrintEnded()
+
+    def on_layerchange(self, layer) -> None:
+        pass
+
+    def on_preprintsend(self, gline, queueindex, mainqueue) -> None:
+        pass
+
+    def on_printsend(self, gline) -> None:
+        self._device.onPrintProgress(gline)
+
+    def on_send(self, command, gline) -> None:
+        pass

@@ -134,6 +134,7 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
         global_container_stack = self._application.getGlobalContainerStack()
         if global_container_stack and instance.getId() == global_container_stack.getMetaDataEntry("serial_port"):
             instance.setBaudRate(global_container_stack.getMetaDataEntry("serial_rate"))
+            instance.setAutoConnect(global_container_stack.getMetaDataEntry("serial_auto_connect"))
             instance.connectionStateChanged.connect(self._onInstanceConnectionStateChanged)
             instance.connect()
 
@@ -141,6 +142,8 @@ class SerialOutputDevicePlugin(OutputDevicePlugin):
         instance = self._instances.pop(name, None)
         if instance:
             if instance.isConnected():
+                if instance.isOnline():
+                    instance.goOffline()
                 instance.close()
                 instance.connectionStateChanged.disconnect(self._onInstanceConnectionStateChanged)
 
